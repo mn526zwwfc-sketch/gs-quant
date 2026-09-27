@@ -155,3 +155,57 @@ Backtesting
    rebalance_dates
    walk_forward_splits
    purged_kfold_splits
+   weights_frame
+
+Fundamentals
+------------
+
+.. currentmodule:: gs_quant.research.fundamentals
+
+.. autosummary::
+   :toctree: functions
+
+   prepare_fundamentals
+   compute_fundamental_metrics
+   mohanram_g_score
+   point_in_time_metrics
+   parse_sec_companyfacts
+   fetch_sec_companyfacts
+   fetch_sec_fundamentals
+
+Growth Company Valuation
+------------------------
+
+.. currentmodule:: gs_quant.research.growth_valuation
+
+.. autosummary::
+   :toctree: functions
+
+   growth_fade_path
+   growth_dcf
+   reverse_dcf_growth
+   residual_income_value
+   blume_adjusted_beta
+   cost_of_capital
+   estimate_initial_growth
+   value_company
+
+.. autosummary::
+   :toctree: classes
+
+   ValuationAssumptions
+   Scenario
+   DCFResult
+   CompanyValuation
+
+Long-Term Growth Strategy
+-------------------------
+
+.. currentmodule:: gs_quant.research.growth_strategy
+
+.. autosummary::
+   :toctree: classes
+
+   GrowthStrategyConfig
+   GrowthStrategyResult
+   LongTermGrowthStrategy

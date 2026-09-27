@@ -27,6 +27,7 @@ from .backtest import (
     rebalance_dates,
     rolling_allocation,
     walk_forward_splits,
+    weights_frame,
 )
 from .data_management import (
     DataQualityReport,
@@ -50,6 +51,34 @@ from .factors import (
     factor_regression,
     fama_macbeth,
     newey_west_lags,
+)
+from .fundamentals import (
+    compute_fundamental_metrics,
+    fetch_sec_companyfacts,
+    fetch_sec_fundamentals,
+    mohanram_g_score,
+    parse_sec_companyfacts,
+    point_in_time_metrics,
+    prepare_fundamentals,
+)
+from .growth_strategy import (
+    GrowthStrategyConfig,
+    GrowthStrategyResult,
+    LongTermGrowthStrategy,
+)
+from .growth_valuation import (
+    CompanyValuation,
+    DCFResult,
+    Scenario,
+    ValuationAssumptions,
+    blume_adjusted_beta,
+    cost_of_capital,
+    estimate_initial_growth,
+    growth_dcf,
+    growth_fade_path,
+    residual_income_value,
+    reverse_dcf_growth,
+    value_company,
 )
 from .performance import (
     annualized_return,

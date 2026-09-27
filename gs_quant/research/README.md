@@ -6,8 +6,10 @@ Cada función documenta en su *docstring* el estudio en el que se basa.
 
 - Solo depende de `numpy`, `pandas`, `scipy` y `statsmodels` (ya incluidos en `gs_quant`).
 - **No requiere sesión de Marquee**: funciona con cualquier serie de precios (CSV, Bloomberg, Yahoo, etc.).
-- 97 tests unitarios verifican las fórmulas contra valores de referencia, implementaciones independientes
+- 135 tests unitarios verifican las fórmulas contra valores de referencia, implementaciones independientes
   y diferencias finitas.
+- Incluye una **estrategia de largo plazo para empresas de alto crecimiento** con valoración DCF, DCF inverso y
+  modelo de ingreso residual (sección 9).
 
 > ⚠️ Material educativo y de investigación. No constituye asesoramiento de inversión. Un backtest es una
 > simulación histórica: los resultados pasados no garantizan resultados futuros.
@@ -139,6 +141,80 @@ Los rendimientos de los factores se obtienen de la *Kenneth R. French Data Libra
 | `rolling_allocation` (walk-forward, estrictamente fuera de muestra) | Bailey, Borwein, López de Prado & Zhu (2014) |
 | `walk_forward_splits`, `purged_kfold_splits` (purga y embargo) | López de Prado (2018, cap. 7) |
 
+### 9. Empresas de crecimiento: valoración y estrategia de largo plazo
+
+`fundamentals.py`, `growth_valuation.py` y `growth_strategy.py` implementan una estrategia de **crecimiento de
+calidad a precio razonable**: comprar empresas que crecen rápido, cuyo crecimiento es rentable y está financiado
+sanamente, y cuyo precio todavía no lo refleja.
+
+```bash
+python -m gs_quant.research.growth_demo      # universo sintético de 120 empresas
+python -m gs_quant.research.growth_demo --fundamentals fundamentales.csv --prices precios.csv --sectors sectores.csv
+```
+
+**Con empresas reales** (fundamentales públicos y gratuitos de la SEC; precios ajustados de tu proveedor):
+
+```python
+import pandas as pd
+from gs_quant.research import fetch_sec_fundamentals, GrowthStrategyConfig, LongTermGrowthStrategy
+
+tickers = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'ADBE', 'CRM', 'NOW', 'INTU']  # tu universo
+fundamentals = fetch_sec_fundamentals(tickers, user_agent='Tu Nombre tu@email.com')      # la SEC exige contacto
+prices = pd.read_csv('precios.csv', index_col=0, parse_dates=True)  # fechas x tickers, precios ajustados
+
+strategy = LongTermGrowthStrategy(fundamentals, prices, GrowthStrategyConfig(n_holdings=5, max_weight=0.25))
+result = strategy.run()
+print(result.holdings())                         # cartera actual con valor razonable, margen de seguridad, scores
+print(strategy.backtest(result).summary())       # simulación histórica neta de costos
+position_set = strategy.to_position_set(result)  # PositionSet de gs_quant.markets (Marquee: resolve/price/Basket)
+```
+
+**Cómo valora cada empresa** (`value_company`):
+
+| Paso | Método | Fundamento académico |
+|---|---|---|
+| Costo de capital | CAPM con beta ajustada de Blume y WACC a valor de mercado | Sharpe (1964); Blume (1971) |
+| Crecimiento inicial | 2/3 CAGR de 3 años + 1/3 último año, **contraído hacia el crecimiento de largo plazo** (persistencia 0,6) y con tope del 35 % | Chan, Karceski & Lakonishok (2003); La Porta (1996) |
+| Trayectoria | Se mantiene 2 años y se desvanece linealmente hasta el 2,5 % en el año 10 | Fuller & Hsia (1984); Damodaran (2012) |
+| Costo del crecimiento | Cada unidad de ingreso nuevo exige inversión según la razón ventas/capital | Damodaran (2012) |
+| Valor terminal | Fórmula *value driver*: el crecimiento solo crea valor si el ROIC supera al WACC (por defecto, ROIC nuevo = WACC) | Koller, Goedhart & Wessels (2020) |
+| Márgenes | Revierten a su media de 3 años | Fama & French (2000) |
+| Escenarios | Pesimista / base / optimista (25/50/25 %) → valor esperado y **margen de seguridad** | Graham & Dodd (1934) |
+| DCF inverso | Crecimiento implícito en el precio vs. previsión realista | Rappaport & Mauboussin (2001) |
+| Contraste | Modelo de ingreso residual (ROE converge al costo del capital) | Ohlson (1995); Frankel & Lee (1998) |
+
+**Cómo selecciona** (`LongTermGrowthStrategy`), en cada rebalanceo trimestral y solo con datos ya publicados:
+
+1. *Filtros de entrada*: ≥ 3 años de historia, mitad del universo con mayor CAGR de ingresos (≥ 5 %), margen
+   operativo positivo, F-score de Piotroski ≥ 5, **ROIC > WACC** y **margen de seguridad ≥ 0**.
+2. *Puntuación compuesta* (rangos transversales):
+   - Crecimiento, 25 %: CAGR, crecimiento del último año, crecimiento del BPA y estabilidad.
+   - Calidad, 30 %: ROIC − WACC, rentabilidad bruta, margen de FCF, devengos bajos, F-score y G-score de Mohanram.
+   - Valoración, 30 %: margen de seguridad, brecha de expectativas y valor residual/precio.
+   - Momentum 12-1, 15 %.
+3. *Histéresis*: una posición se mantiene mientras siga entre las `n × 1,5` mejores y el precio no supere en más
+   de ~11 % su valor estimado. Reduce la rotación un ~20 % (Novy-Marx & Velikov, 2016).
+4. *Pesos*: paridad de riesgo con covarianza Ledoit-Wolf y tope del 10 % por posición. Si hay pocas
+   oportunidades baratas, el resto queda en **efectivo** en vez de concentrarse.
+
+| Métrica contable (`fundamentals.py`) | Fundamento académico |
+|---|---|
+| ROIC, NOPAT, capital invertido | Koller, Goedhart & Wessels (2020) |
+| Rentabilidad bruta (beneficio bruto / activos) | Novy-Marx (2013) |
+| Devengos (*accruals*) | Sloan (1996) |
+| Crecimiento de activos | Cooper, Gulen & Schill (2008) |
+| F-score (0–9) | Piotroski (2000) |
+| G-score (0–8), diseñado para acciones de crecimiento | Mohanram (2005) |
+| Calidad en general | Asness, Frazzini & Pedersen (2019) |
+
+> **Limitaciones.**
+> - Los resultados del demo usan datos sintéticos que contienen errores de precio aprovechables por construcción.
+>   Validan la mecánica, no la rentabilidad real.
+> - El modelo supone empresas con beneficio operativo positivo. Las que pierden dinero necesitan supuestos
+>   explícitos de margen objetivo.
+> - El lector de la SEC solo lee US GAAP: las empresas extranjeras que reportan en IFRS se omiten.
+> - Usar solo empresas que cotizan hoy introduce sesgo de supervivencia en el backtest.
+
 ## Mejores prácticas respaldadas por la literatura
 
 1. **Datos *point-in-time*.** Usar cada dato solo desde la fecha en que se publicó (`point_in_time`), rellenar
@@ -168,6 +244,7 @@ Los rendimientos de los factores se obtienen de la *Kenneth R. French Data Libra
 - Acerbi, C. & Tasche, D. (2002). On the coherence of expected shortfall. *Journal of Banking & Finance*, 26(7), 1487–1503.
 - Ang, A., Hodrick, R., Xing, Y. & Zhang, X. (2006). The cross-section of volatility and expected returns. *Journal of Finance*, 61(1), 259–299.
 - Artzner, P., Delbaen, F., Eber, J.-M. & Heath, D. (1999). Coherent measures of risk. *Mathematical Finance*, 9(3), 203–228.
+- Asness, C., Frazzini, A. & Pedersen, L. (2019). Quality minus junk. *Review of Accounting Studies*, 24(1), 34–112.
 - Asness, C., Moskowitz, T. & Pedersen, L. (2013). Value and momentum everywhere. *Journal of Finance*, 68(3), 929–985.
 - Bailey, D., Borwein, J., López de Prado, M. & Zhu, Q. (2014). Pseudo-mathematics and financial charlatanism. *Notices of the AMS*, 61(5), 458–471.
 - Bailey, D. & López de Prado, M. (2012). The Sharpe ratio efficient frontier. *Journal of Risk*, 15(2), 3–44.
@@ -177,23 +254,31 @@ Los rendimientos de los factores se obtienen de la *Kenneth R. French Data Libra
 - Black, F. & Litterman, R. (1992). Global portfolio optimization. *Financial Analysts Journal*, 48(5), 28–43.
 - Black, F. & Scholes, M. (1973). The pricing of options and corporate liabilities. *Journal of Political Economy*, 81(3), 637–654.
 - Blitz, D. & van Vliet, P. (2007). The volatility effect. *Journal of Portfolio Management*, 34(1), 102–113.
+- Blume, M. (1971). On the assessment of risk. *Journal of Finance*, 26(1), 1–10.
 - Brock, W., Lakonishok, J. & LeBaron, B. (1992). Simple technical trading rules and the stochastic properties of stock returns. *Journal of Finance*, 47(5), 1731–1764.
 - Carhart, M. (1997). On persistence in mutual fund performance. *Journal of Finance*, 52(1), 57–82.
+- Chan, L., Karceski, J. & Lakonishok, J. (2003). The level and persistence of growth rates. *Journal of Finance*, 58(2), 643–684.
 - Chopra, V. & Ziemba, W. (1993). The effect of errors in means, variances, and covariances on optimal portfolio choice. *Journal of Portfolio Management*, 19(2), 6–11.
 - Clarke, R., de Silva, H. & Thorley, S. (2006). Minimum-variance portfolios in the U.S. equity market. *Journal of Portfolio Management*, 33(1), 10–24.
+- Cooper, M., Gulen, H. & Schill, M. (2008). Asset growth and the cross-section of stock returns. *Journal of Finance*, 63(4), 1609–1651.
 - Cornuejols, G. & Tütüncü, R. (2007). *Optimization Methods in Finance*. Cambridge University Press.
+- Damodaran, A. (2012). *Investment Valuation* (3rd ed.). Wiley.
 - Daniel, K. & Moskowitz, T. (2016). Momentum crashes. *Journal of Financial Economics*, 122(2), 221–247.
 - DeMiguel, V., Garlappi, L. & Uppal, R. (2009). Optimal versus naive diversification: how inefficient is the 1/N portfolio strategy? *Review of Financial Studies*, 22(5), 1915–1953.
 - Faber, M. (2007). A quantitative approach to tactical asset allocation. *Journal of Wealth Management*, 9(4), 69–79.
 - Fabozzi, F. (2012). *Bond Markets, Analysis, and Strategies* (8th ed.). Pearson.
 - Fama, E. & French, K. (1992). The cross-section of expected stock returns. *Journal of Finance*, 47(2), 427–465.
 - Fama, E. & French, K. (1993). Common risk factors in the returns on stocks and bonds. *Journal of Financial Economics*, 33(1), 3–56.
+- Fama, E. & French, K. (2000). Forecasting profitability and earnings. *Journal of Business*, 73(2), 161–175.
 - Fama, E. & French, K. (2015). A five-factor asset pricing model. *Journal of Financial Economics*, 116(1), 1–22.
 - Fama, E. & MacBeth, J. (1973). Risk, return, and equilibrium: empirical tests. *Journal of Political Economy*, 81(3), 607–636.
 - Favre, L. & Galeano, J.-A. (2002). Mean-modified value-at-risk optimization with hedge funds. *Journal of Alternative Investments*, 5(2), 21–25.
+- Frankel, R. & Lee, C. (1998). Accounting valuation, market expectation, and cross-sectional stock returns. *Journal of Accounting and Economics*, 25(3), 283–319.
 - Frazzini, A. & Pedersen, L. (2014). Betting against beta. *Journal of Financial Economics*, 111(1), 1–25.
+- Fuller, R. & Hsia, C.-C. (1984). A simplified common stock valuation model. *Financial Analysts Journal*, 40(5), 49–56.
 - Getmansky, M., Lo, A. & Makarov, I. (2004). An econometric model of serial correlation and illiquidity in hedge fund returns. *Journal of Financial Economics*, 74(3), 529–609.
 - Gordon, M. (1962). *The Investment, Financing, and Valuation of the Corporation*. Irwin.
+- Graham, B. & Dodd, D. (1934). *Security Analysis*. McGraw-Hill.
 - Grinold, R. & Kahn, R. (2000). *Active Portfolio Management* (2nd ed.). McGraw-Hill.
 - Griveau-Billion, T., Richard, J.-C. & Roncalli, T. (2013). A fast algorithm for computing high-dimensional risk parity portfolios. SSRN 2325255.
 - Hampel, F. (1974). The influence curve and its role in robust estimation. *Journal of the American Statistical Association*, 69(346), 383–393.
@@ -210,6 +295,9 @@ Los rendimientos de los factores se obtienen de la *Kenneth R. French Data Libra
 - Jorion, P. (2006). *Value at Risk* (3rd ed.). McGraw-Hill.
 - Keating, C. & Shadwick, W. (2002). A universal performance measure. *Journal of Performance Measurement*, 6(3), 59–84.
 - Kelly, J. (1956). A new interpretation of information rate. *Bell System Technical Journal*, 35(4), 917–926.
+- Koller, T., Goedhart, M. & Wessels, D. (2020). *Valuation: Measuring and Managing the Value of Companies* (7th ed.). Wiley.
+- La Porta, R. (1996). Expectations and the cross-section of stock returns. *Journal of Finance*, 51(5), 1715–1742.
+- Lakonishok, J., Shleifer, A. & Vishny, R. (1994). Contrarian investment, extrapolation, and risk. *Journal of Finance*, 49(5), 1541–1578.
 - Laloux, L., Cizeau, P., Bouchaud, J.-P. & Potters, M. (1999). Noise dressing of financial correlation matrices. *Physical Review Letters*, 83(7), 1467–1470.
 - Ledoit, O. & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365–411.
 - Lehmann, B. (1990). Fads, martingales, and market efficiency. *Quarterly Journal of Economics*, 105(1), 1–28.
@@ -227,16 +315,22 @@ Los rendimientos de los factores se obtienen de la *Kenneth R. French Data Libra
 - Markowitz, H. (1952). Portfolio selection. *Journal of Finance*, 7(1), 77–91.
 - Merton, R. (1973). Theory of rational option pricing. *Bell Journal of Economics and Management Science*, 4(1), 141–183.
 - Michaud, R. (1989). The Markowitz optimization enigma: is 'optimized' optimal? *Financial Analysts Journal*, 45(1), 31–42.
+- Mohanram, P. (2005). Separating winners from losers among low book-to-market stocks using financial statement analysis. *Review of Accounting Studies*, 10(2–3), 133–170.
 - Moreira, A. & Muir, T. (2017). Volatility-managed portfolios. *Journal of Finance*, 72(4), 1611–1644.
 - Moskowitz, T., Ooi, Y. H. & Pedersen, L. (2012). Time series momentum. *Journal of Financial Economics*, 104(2), 228–250.
 - Newey, W. & West, K. (1987). A simple, positive semi-definite, heteroskedasticity and autocorrelation consistent covariance matrix. *Econometrica*, 55(3), 703–708.
 - Newey, W. & West, K. (1994). Automatic lag selection in covariance matrix estimation. *Review of Economic Studies*, 61(4), 631–653.
+- Novy-Marx, R. (2013). The other side of value: the gross profitability premium. *Journal of Financial Economics*, 108(1), 1–28.
 - Novy-Marx, R. & Velikov, M. (2016). A taxonomy of anomalies and their trading costs. *Review of Financial Studies*, 29(1), 104–147.
+- Ohlson, J. (1995). Earnings, book values, and dividends in equity valuation. *Contemporary Accounting Research*, 11(2), 661–687.
+- Piotroski, J. (2000). Value investing: the use of historical financial statement information to separate winners from losers. *Journal of Accounting Research*, 38(Supplement), 1–41.
 - Qian, E. (2005). Risk parity portfolios: efficient portfolios through true diversification. PanAgora Asset Management.
+- Rappaport, A. & Mauboussin, M. (2001). *Expectations Investing*. Harvard Business School Press.
 - Rousseeuw, P. & Croux, C. (1993). Alternatives to the median absolute deviation. *Journal of the American Statistical Association*, 88(424), 1273–1283.
 - Sharpe, W. (1964). Capital asset prices: a theory of market equilibrium under conditions of risk. *Journal of Finance*, 19(3), 425–442.
 - Sharpe, W. (1966). Mutual fund performance. *Journal of Business*, 39(1), 119–138.
 - Sharpe, W. (1994). The Sharpe ratio. *Journal of Portfolio Management*, 21(1), 49–58.
+- Sloan, R. (1996). Do stock prices fully reflect information in accruals and cash flows about future earnings? *The Accounting Review*, 71(3), 289–315.
 - Sortino, F. & Price, L. (1994). Performance measurement in a downside risk framework. *Journal of Investing*, 3(3), 59–64.
 - Spinu, F. (2013). An algorithm for computing risk parity weights. SSRN 2297383.
 - Thorp, E. (2006). The Kelly criterion in blackjack, sports betting, and the stock market. *Handbook of Asset and Liability Management*, vol. 1, 385–428.

@@ -186,7 +186,20 @@ def rolling_allocation(
         rows[date] = allocator(window)
     if not rows:
         raise MqValueError('no rebalance date has enough history')
-    return pd.DataFrame.from_dict(rows, orient='index').reindex(columns=returns.columns).fillna(0.0)
+    return weights_frame(rows, returns.columns)
+
+
+def weights_frame(rows: dict[pd.Timestamp, pd.Series], columns: pd.Index) -> pd.DataFrame:
+    """
+    Assemble per-date weight vectors into a frame of target weights
+
+    :param rows: date to weights; an empty series means the whole portfolio is in cash on that date
+    :param columns: assets of the frame
+    :return: weights (dates x assets), sorted by date, with zeros for assets not held
+    """
+    frame = pd.DataFrame([w.reindex(columns) for w in rows.values()], index=pd.DatetimeIndex(list(rows)))
+    frame.columns = columns
+    return frame.fillna(0.0).sort_index()
 
 
 def walk_forward_splits(
