@@ -16,6 +16,7 @@ GS Quant API
    instrument 
    markets
    models
+   research
    risk
    timeseries
 
